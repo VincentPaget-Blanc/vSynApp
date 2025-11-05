@@ -8,6 +8,10 @@ This app provides a suite of tools to analyze immunofluorescence microscopy imag
 
 The app incorporates a variety of statistical and computational methods to analyze the data. These methods help distinguish between specific staining and background noise or non-specific staining, ensuring accurate interpretation of the microscopy data.
 
+### Citation
+
+If you use this software please use the following citation  “Paget-Blanc, V. (2025). vSynApp (0.094051). Zenodo. https://doi.org/10.5281/zenodo.17533244 “
+
 ### Purpose of the App
 
 The app is tailored to address specific research questions related to synaptosome imaging, including:
