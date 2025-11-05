@@ -181,7 +181,7 @@ t-SNE (t-distributed Stochastic Neighbor Embedding) and k-NN (k-Nearest Neighbor
 - Clusters identified by k-NN can reveal distinct groups of synaptosomes with similar properties.
 - The spatial distribution of points in the t-SNE plot can indicate the similarity between data points, with closer points being more similar.
 
-#### 6. t-SNE and kNN Thresholding
+#### 7. t-SNE and kNN Thresholding
 
 **Purpose**:
 
@@ -213,7 +213,7 @@ t-SNE and kNN thresholding uses the clusters identified by the k-NN algorithm to
 **Interpretation**:
 
 The determined thresholds can help segment images based on both intensity and spatial relationships between channels, providing insights into protein interactions and potential bleedthrough effects.
-#### 7. Triangle Thresholding
+#### 8. Triangle Thresholding
 
 **Purpose**:
 Determines intensity thresholds for each channel based on the histogram of intensity values. This helps segment images to distinguish between specific and non-specific staining or to identify bleedthrough between channels.
@@ -235,7 +235,7 @@ Histograms showing the distribution of intensity values for each channel. The th
 **Interpretation**:
 - The threshold value can be used to binarize images, separating significant signal from background noise or bleedthrough, which is crucial for accurate quantification of protein proximity.
 
-#### 8. K-means Thresholding
+#### 9. K-means Thresholding
 
 **Purpose**:
 Uses K-means clustering to determine optimal intensity thresholds based on natural groupings of intensity values. This is more flexible than histogram-based thresholding and can reveal multiple intensity clusters, which might correspond to different states of protein recruitment or varying levels of bleedthrough.
@@ -260,7 +260,7 @@ Histograms or cluster plots showing the natural groupings of intensity values, w
 **Interpretation**:
 - Different intensity clusters may represent distinct states of protein recruitment or different levels of bleedthrough, providing a more nuanced understanding of the experimental data.
 
-#### 9. Threshold Vector plots
+#### 10. Threshold Vector plots
 **Purpose**:
 Both thresholding methods will also generate vector plots for double-positive particles, which can indicate whether synaptosomes that fall above both thresholds exhibit a preferred directionality, potentially indicating bleedthrough.
 
@@ -269,7 +269,7 @@ Vector plots, indicating significant directionality
 
 **Example Image**:
 ![Vector Plot for double-positive particles](path/to/kmeans_cluster_plot_example.png)
-#### 10. Vector Magnitude Intensity Threshold
+#### 11. Vector Magnitude Intensity Threshold
 
 **Purpose**:
 Determines intensity thresholds for channels based on vector magnitudes and angles, focusing on separating vectors with significant directionality. This integrates spatial and intensity information to identify meaningful thresholds, which can help distinguish specific from non-specific staining or detect consistent bleedthrough patterns.
