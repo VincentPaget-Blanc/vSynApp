@@ -10,7 +10,7 @@ The app incorporates a variety of statistical and computational methods to analy
 
 ### Citation
 
-If you use this software please use the following citation  “Paget-Blanc, V. (2025). vSynApp (0.094051). Zenodo. https://doi.org/10.5281/zenodo.17533244 “
+If you publish work using this software please use the following citation  “Paget-Blanc, V. (2025). vSynApp (0.094051). Zenodo. https://doi.org/10.5281/zenodo.17533244 “
 
 ### Purpose of the App
 
