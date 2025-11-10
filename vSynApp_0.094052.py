@@ -359,9 +359,9 @@ class ThresholdingApp:
         self.display_plot_in_new_window(fig, "t-SNE Clustering")
         plt.close(fig)
     
-    def export_plot_tsne_clusters(self, directory, X_tsne, labels_tsne, k):
+    def export_tsne_clusters_plot(self, directory, X_tsne, labels_tsne, k, bkgd_corr_ch1, bkgd_corr_ch2):
         fig = self._create_tsne_cluster_plot(X_tsne, labels_tsne, k)
-        filename = os.path.join(directory, f"t-SNE_Clusters_{X_tsne}_vs_{labels_tsne}.{self.export_format.get()}")
+        filename = os.path.join(directory, f"t-SNE_Clusters_{bkgd_corr_ch1}_vs_{bkgd_corr_ch2}.{self.export_format.get()}")
         fig.savefig(filename, format=self.export_format.get())
         plt.close(fig)
     
@@ -765,9 +765,10 @@ class ThresholdingApp:
             
         if self.tsne_knn_var.get():
             X_tsne, labels_tsne, k = self.perform_tsne_knn_analysis(bkgd_corr_ch1, bkgd_corr_ch2)
-            self.export_tsne_clusters_plot(directory, X_tsne, labels_tsne, k)
+            self.export_tsne_clusters_plot(directory, X_tsne, labels_tsne, k, bkgd_corr_ch1, bkgd_corr_ch2)
             self.export_original_clusters_plot(directory, bkgd_corr_ch1, bkgd_corr_ch2, labels_tsne, k)
             self.export_individual_clusters_plot(directory, bkgd_corr_ch1, bkgd_corr_ch2, labels_tsne, k)
+
     
         if self.tsne_knn_thresh_var.get():
             if self.X_tsne is None or self.labels_tsne is None or self.k is None:
