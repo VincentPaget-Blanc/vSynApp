@@ -52,6 +52,12 @@ class ThresholdingApp:
         self.X_tsne = None
         self.labels_tsne = None
         self.k = None
+        # Multi-file search state
+        self.multi_search_enabled = tk.BooleanVar(value=False)
+        self.search_folder = tk.StringVar(value="")
+        self.search_string = tk.StringVar(value="")
+        self.matched_files = []          # list of (display_label, full_path)
+        self.selected_match_var = tk.StringVar()
         self.create_widgets()
 
     def create_widgets(self):
@@ -79,6 +85,78 @@ class ThresholdingApp:
         self.canvas.pack(side="left", fill="both", expand=True)
         self.scrollbar.pack(side="right", fill="y")
     
+        # ── Multi-File Search Panel ──────────────────────────────────────────
+        self.multi_search_toggle = tk.Checkbutton(
+            self.scrollable_frame,
+            text="🔍  Enable Multi-File Search (scan folder for matching files)",
+            variable=self.multi_search_enabled,
+            command=self._toggle_multi_search_panel,
+            font=("TkDefaultFont", 9, "bold")
+        )
+        self.multi_search_toggle.pack(anchor='w', padx=10, pady=(10, 0))
+
+        # The collapsible frame — hidden until the checkbox is ticked
+        self.multi_search_frame = tk.LabelFrame(
+            self.scrollable_frame,
+            text="Multi-File Search",
+            padx=10, pady=8
+        )
+        # (not packed yet — revealed by _toggle_multi_search_panel)
+
+        # Row 0 – Folder picker
+        tk.Label(self.multi_search_frame, text="Search Folder:").grid(
+            row=0, column=0, sticky='w', padx=4, pady=3)
+        self.folder_entry = tk.Entry(
+            self.multi_search_frame, textvariable=self.search_folder,
+            width=45, state='readonly')
+        self.folder_entry.grid(row=0, column=1, padx=4, pady=3, sticky='ew')
+        tk.Button(
+            self.multi_search_frame, text="Browse…",
+            command=self._browse_search_folder
+        ).grid(row=0, column=2, padx=4, pady=3)
+
+        # Row 1 – Filter string
+        tk.Label(self.multi_search_frame, text="Filename contains:").grid(
+            row=1, column=0, sticky='w', padx=4, pady=3)
+        self.search_entry = tk.Entry(
+            self.multi_search_frame, textvariable=self.search_string, width=30)
+        self.search_entry.grid(row=1, column=1, padx=4, pady=3, sticky='ew')
+        tk.Button(
+            self.multi_search_frame, text="Search",
+            command=self._run_file_search
+        ).grid(row=1, column=2, padx=4, pady=3)
+
+        # Row 2 – Results label
+        self.search_results_label = tk.Label(
+            self.multi_search_frame, text="No search run yet.", fg="grey")
+        self.search_results_label.grid(
+            row=2, column=0, columnspan=3, sticky='w', padx=4, pady=(2, 0))
+
+        # Row 3 – Dropdown of matched files
+        tk.Label(self.multi_search_frame, text="Matched file:").grid(
+            row=3, column=0, sticky='w', padx=4, pady=3)
+        self.match_dropdown = ttk.Combobox(
+            self.multi_search_frame,
+            textvariable=self.selected_match_var,
+            state='disabled',
+            width=55
+        )
+        self.match_dropdown.grid(row=3, column=1, columnspan=2,
+                                 padx=4, pady=3, sticky='ew')
+        self.match_dropdown.bind("<<ComboboxSelected>>", self._on_match_selected)
+
+        # Row 4 – Load selected file button
+        self.load_match_btn = tk.Button(
+            self.multi_search_frame,
+            text="Load Selected File",
+            command=self._load_selected_match,
+            state='disabled'
+        )
+        self.load_match_btn.grid(row=4, column=1, sticky='w', padx=4, pady=4)
+
+        self.multi_search_frame.grid_columnconfigure(1, weight=1)
+
+        # ── Single-File Load Button (always present) ──────────────────────────
         # Load Data Button
         self.load_button = tk.Button(self.scrollable_frame, text="Load Data", command=self.load_data)
         self.load_button.pack(pady=10)
@@ -305,37 +383,46 @@ class ThresholdingApp:
         self.export_format_dropdown.pack()
         
     def perform_tsne_knn_analysis(self, bkgd_corr_ch1, bkgd_corr_ch2):
+        k = self.k_var.get()
+        k = max(k, 2)  # guard against k=1
+
+        # Reuse cached result if k and columns haven't changed
+        if (self.X_tsne is not None and self.labels_tsne is not None
+                and self.k == k
+                and getattr(self, '_tsne_ch1', None) == bkgd_corr_ch1
+                and getattr(self, '_tsne_ch2', None) == bkgd_corr_ch2):
+            return self.X_tsne, self.labels_tsne, k
+
         ch1_intensity = self.data[bkgd_corr_ch1].values
         ch2_intensity = self.data[bkgd_corr_ch2].values
         X = np.column_stack((ch1_intensity, ch2_intensity))
-        # Apply t-SNE
         tsne = TSNE(n_components=2, random_state=0, perplexity=30)
         X_tsne = tsne.fit_transform(X)
-        # Apply k-NN
-        k = self.k_var.get()
         kmeans_tsne = KMeans(n_clusters=k, random_state=0)
         labels_tsne = kmeans_tsne.fit_predict(X_tsne)
-        # Store the results
+
         self.X_tsne = X_tsne
         self.labels_tsne = labels_tsne
         self.k = k
-        # Update dropdowns for cluster selection
+        self._tsne_ch1 = bkgd_corr_ch1
+        self._tsne_ch2 = bkgd_corr_ch2
+
         self.cluster_x_dropdown['values'] = [f'Cluster {i}' for i in range(k)]
-        self.cluster_x_dropdown.set(f'Cluster 0')
+        self.cluster_x_dropdown.set('Cluster 0')
         self.cluster_y_dropdown['values'] = [f'Cluster {i}' for i in range(k)]
-        self.cluster_y_dropdown.set(f'Cluster 2')
+        self.cluster_y_dropdown.set(f'Cluster {min(2, k-1)}')
         return X_tsne, labels_tsne, k
     
     def _create_tsne_cluster_plot(self, X_tsne, labels_tsne, k):
+        k = max(k, 2)  # guard: viridis(i/(k-1)) divides by zero when k==1
         fig, ax = plt.subplots(figsize=(10, 8))
         scatter = ax.scatter(X_tsne[:, 0], X_tsne[:, 1], c=labels_tsne, cmap='viridis', alpha=0.5)
-    
-        # Create a legend with a single dot for each cluster
+
         legend_elements = []
         for i in range(k):
-            color = plt.cm.viridis(i / (k - 1))  # Use the same colormap as the scatter plot
+            color = plt.cm.viridis(i / (k - 1))
             legend_elements.append(plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=color, markersize=10, label=f'Cluster {i}'))
-    
+
         ax.legend(handles=legend_elements, title='Clusters')
         ax.set_title('t-SNE Clustering')
         ax.set_xlabel('t-SNE 1')
@@ -359,24 +446,24 @@ class ThresholdingApp:
         self.display_plot_in_new_window(fig, "t-SNE Clustering")
         plt.close(fig)
     
-    def export_tsne_clusters_plot(self, directory, X_tsne, labels_tsne, k, bkgd_corr_ch1, bkgd_corr_ch2):
+    def export_tsne_clusters_plot(self, directory, X_tsne, labels_tsne, k):
         fig = self._create_tsne_cluster_plot(X_tsne, labels_tsne, k)
-        filename = os.path.join(directory, f"t-SNE_Clusters_{bkgd_corr_ch1}_vs_{bkgd_corr_ch2}.{self.export_format.get()}")
+        filename = os.path.join(directory, f"t-SNE_Clusters_k{k}.{self.export_format.get()}")
         fig.savefig(filename, format=self.export_format.get())
         plt.close(fig)
     
     def _create_original_cluster_plot(self, bkgd_corr_ch1, bkgd_corr_ch2, labels_tsne, k):
+        k = max(k, 2)
         ch1_intensity = self.data[bkgd_corr_ch1].values
         ch2_intensity = self.data[bkgd_corr_ch2].values
         fig, ax = plt.subplots(figsize=(10, 8))
         scatter = ax.scatter(ch1_intensity, ch2_intensity, c=labels_tsne, cmap='viridis', alpha=0.5)
-    
-        # Create a legend with a single dot for each cluster
+
         legend_elements = []
         for i in range(k):
-            color = plt.cm.viridis(i / (k - 1))  # Use the same colormap as the scatter plot
+            color = plt.cm.viridis(i / (k - 1))
             legend_elements.append(plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=color, markersize=10, label=f'Cluster {i}'))
-    
+
         ax.legend(handles=legend_elements, title='Clusters')
         ax.set_xscale('symlog')
         ax.set_yscale('symlog')
@@ -396,51 +483,34 @@ class ThresholdingApp:
         fig.savefig(filename, format=self.export_format.get())
         plt.close(fig)
     
-    def toggle_tsne_knn_analysis_widgets(self):
-        if self.tsne_knn_var.get():
-            if self.data is not None and hasattr(self, 'bkgd_corr_ch1') and hasattr(self, 'bkgd_corr_ch2'):
-                self.perform_tsne_knn_analysis(self.bkgd_corr_ch1, self.bkgd_corr_ch2)
-            # Remove the warning message when ticking the checkbox
-            # The warning will only appear when running the analysis without data
-
     def _create_individual_clusters_plot(self, bkgd_corr_ch1, bkgd_corr_ch2, labels_tsne, k):
+        k = max(k, 2)
         ch1_intensity = self.data[bkgd_corr_ch1].values
         ch2_intensity = self.data[bkgd_corr_ch2].values
-    
-        # Determine the global min and max for x and y axes
+
         x_min, x_max = np.min(ch1_intensity), np.max(ch1_intensity)
         y_min, y_max = np.min(ch2_intensity), np.max(ch2_intensity)
-    
-        # Add a small buffer to the min and max values
         x_buffer = (x_max - x_min) * 0.05
         y_buffer = (y_max - y_min) * 0.05
-    
-        fig, axes = plt.subplots(1, k, figsize=(5*k, 5))
-    
-        # Use the same colormap as in the "Clusters in Original Data" plot
+
+        # squeeze=False ensures axes is always a 1-D array even when k==1
+        fig, axes = plt.subplots(1, k, figsize=(5*k, 5), squeeze=False)
+        axes = axes[0]  # flatten to 1-D
+
         cmap = plt.cm.viridis
-    
         for i in range(k):
             ax = axes[i]
             cluster_mask = labels_tsne == i
-            color = cmap(i / (k - 1))  # Use the same color as in the "Clusters in Original Data" plot
-            ax.scatter(
-                ch1_intensity[cluster_mask],
-                ch2_intensity[cluster_mask],
-                color=color,
-                alpha=0.5
-            )
+            color = cmap(i / (k - 1))
+            ax.scatter(ch1_intensity[cluster_mask], ch2_intensity[cluster_mask], color=color, alpha=0.5)
             ax.set_xscale('symlog')
             ax.set_yscale('symlog')
-    
-            # Set the same x and y limits for all subplots
             ax.set_xlim(x_min - x_buffer, x_max + x_buffer)
             ax.set_ylim(y_min - y_buffer, y_max + y_buffer)
-    
             ax.set_title(f'Cluster {i}')
             ax.set_xlabel(bkgd_corr_ch1)
             ax.set_ylabel(bkgd_corr_ch2)
-    
+
         plt.tight_layout()
         return fig
 
@@ -516,7 +586,7 @@ class ThresholdingApp:
             bbox_style = dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.7)
         ax.text(position[0], position[1], text,
                 transform=ax.transAxes,
-                verticalalignment='top',
+                verticalalignment='bottom',
                 fontsize=fontsize,
                 bbox=bbox_style)
 
@@ -536,6 +606,101 @@ class ThresholdingApp:
                 messagebox.showinfo("Success", "Data loaded successfully!")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load data: {e}")
+
+    # ── Multi-File Search helpers ─────────────────────────────────────────────
+
+    def _toggle_multi_search_panel(self):
+        """Show or hide the multi-file search panel based on the checkbox."""
+        if self.multi_search_enabled.get():
+            self.multi_search_frame.pack(
+                in_=self.scrollable_frame,
+                before=self.load_button,
+                fill='x', padx=10, pady=(2, 6)
+            )
+        else:
+            self.multi_search_frame.pack_forget()
+
+    def _browse_search_folder(self):
+        folder = filedialog.askdirectory(title="Select root folder to search")
+        if folder:
+            self.search_folder.set(folder)
+            # Auto-trigger search if a filter string is already set
+            if self.search_string.get().strip():
+                self._run_file_search()
+
+    def _run_file_search(self):
+        """Walk the selected folder tree and collect CSV files whose names
+        contain the filter string (case-insensitive).  Results are stored in
+        self.matched_files and populate the dropdown."""
+        folder = self.search_folder.get().strip()
+        needle = self.search_string.get().strip().lower()
+
+        if not folder:
+            messagebox.showwarning("Multi-File Search",
+                                   "Please select a folder first.")
+            return
+
+        self.matched_files = []
+        for dirpath, _dirnames, filenames in os.walk(folder):
+            for fname in sorted(filenames):
+                if not fname.lower().endswith('.csv'):
+                    continue
+                if needle and needle not in fname.lower():
+                    continue
+                full_path = os.path.join(dirpath, fname)
+                self.matched_files.append((fname, full_path))
+
+        n = len(self.matched_files)
+        if n == 0:
+            self.search_results_label.config(
+                text="No matching CSV files found.", fg="red")
+            self.match_dropdown.config(state='disabled')
+            self.match_dropdown['values'] = []
+            self.selected_match_var.set("")
+            self.load_match_btn.config(state='disabled')
+        else:
+            self.search_results_label.config(
+                text=f"{n} file{'s' if n != 1 else ''} found.", fg="darkgreen")
+            labels = [label for label, _ in self.matched_files]
+            self.match_dropdown['values'] = labels
+            self.match_dropdown.config(state='readonly')
+            self.match_dropdown.current(0)
+            self.selected_match_var.set(labels[0])
+            self.load_match_btn.config(state='normal')
+
+    def _on_match_selected(self, event=None):
+        """Enable the Load button whenever the user picks from the dropdown."""
+        if self.selected_match_var.get():
+            self.load_match_btn.config(state='normal')
+
+    def _load_selected_match(self):
+        """Load whichever file is currently selected in the dropdown,
+        reusing exactly the same pipeline as the single-file Load button."""
+        idx = self.match_dropdown.current()
+        if idx < 0 or idx >= len(self.matched_files):
+            return
+        _label, full_path = self.matched_files[idx]
+        if not full_path or not os.path.isfile(full_path):
+            messagebox.showerror("Error", f"File not found:\n{full_path}")
+            return
+        try:
+            self.data = pd.read_csv(full_path)
+            self.data_file_path = full_path
+            self.columns = list(self.data.columns)
+            self.channel_names = self.detect_channels(self.columns)
+            self.channel1_dropdown['values'] = self.channel_names
+            self.channel1_dropdown.config(state="readonly")
+            self.channel2_dropdown['values'] = self.channel_names
+            self.channel2_dropdown.config(state="readonly")
+            self.update_column_dropdowns()
+            messagebox.showinfo(
+                "Success",
+                f"Loaded:\n{os.path.basename(full_path)}"
+            )
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load file:\n{e}")
+
+    # ─────────────────────────────────────────────────────────────────────────
 
     def detect_channels(self, columns):
         common_parts = ["Bkgd_Intensity_", "BkgdCorrectedIntensity_", "Centroid_X_", "Centroid_Y_"]
@@ -719,9 +884,7 @@ class ThresholdingApp:
                         self.generate_single_polar_plot(bkgd_corr_ch1, bkgd_corr_ch2, cx_ch1, cy_ch1, cx_ch2, cy_ch2, x_threshold, y_threshold)
                 
         if self.vector_magnitude_intensity_var.get():
-            fig = self.vector_magnitude_intensity_threshold_plot(bkgd_corr_ch1, bkgd_corr_ch2, cx_ch1, cy_ch1, cx_ch2, cy_ch2)
-            self.display_plot_in_new_window(fig, "Vector Magnitude Intensity Threshold Analysis")
-            plt.close(fig)  # Close the figure to prevent memory leaks
+            self.vector_magnitude_intensity_threshold_plot(bkgd_corr_ch1, bkgd_corr_ch2, cx_ch1, cy_ch1, cx_ch2, cy_ch2)
     
     def export_plots(self):
         if self.data is None:
@@ -765,10 +928,9 @@ class ThresholdingApp:
             
         if self.tsne_knn_var.get():
             X_tsne, labels_tsne, k = self.perform_tsne_knn_analysis(bkgd_corr_ch1, bkgd_corr_ch2)
-            self.export_tsne_clusters_plot(directory, X_tsne, labels_tsne, k, bkgd_corr_ch1, bkgd_corr_ch2)
+            self.export_tsne_clusters_plot(directory, X_tsne, labels_tsne, k)
             self.export_original_clusters_plot(directory, bkgd_corr_ch1, bkgd_corr_ch2, labels_tsne, k)
             self.export_individual_clusters_plot(directory, bkgd_corr_ch1, bkgd_corr_ch2, labels_tsne, k)
-
     
         if self.tsne_knn_thresh_var.get():
             if self.X_tsne is None or self.labels_tsne is None or self.k is None:
@@ -1225,7 +1387,9 @@ class ThresholdingApp:
             ax2.grid(True)
         else:
             ax2.set_title('No vectors below threshold', y=1.1)
-        ax2.set_title(f'Below Threshold ({num_below_threshold} vectors, {percent_below_threshold:.1f}%)', y=1.1)
+            ax2.grid(True)
+        if num_below_threshold > 0:
+            ax2.set_title(f'Below Threshold ({num_below_threshold} vectors, {percent_below_threshold:.1f}%)', y=1.1)
     
         # 3. Above threshold vectors polar plot
         ax3 = plt.subplot(2, 2, 3, polar=True)
@@ -1250,7 +1414,9 @@ class ThresholdingApp:
             ax3.grid(True)
         else:
             ax3.set_title('No vectors above threshold', y=1.1)
-        ax3.set_title(f'Above Threshold ({num_above_threshold} vectors, {percent_above_threshold:.1f}%)', y=1.1)
+            ax3.grid(True)
+        if num_above_threshold > 0:
+            ax3.set_title(f'Above Threshold ({num_above_threshold} vectors, {percent_above_threshold:.1f}%)', y=1.1)
     
         # 4. Plot showing how MRL changes as we add more vectors (sorted by magnitude)
         ax4 = plt.subplot(2, 2, 4)
@@ -1415,12 +1581,36 @@ class ThresholdingApp:
         u_stat, u_p_value = mannwhitneyu(ch1_background, ch2_background)
         t_p_value_rounded = f"{t_p_value:.5f}" if t_p_value >= 0.0001 else "p < 0.0001"
         u_p_value_rounded = f"{u_p_value:.5f}" if u_p_value >= 0.0001 else "p < 0.0001"
-        fig, ax = plt.subplots(figsize=(6, 6))
-        ax.boxplot([ch1_background, ch2_background], tick_labels=[bkgd_ch1, bkgd_ch2])
-        ax.set_title('Background Comparison')
-        text_content = f'T-test p-value: {t_p_value_rounded}\n' \
-                      f'U-test p-value: {u_p_value_rounded}'
-        self.add_plot_text(ax, text_content, position=(0.5, 0.95))
+
+        fig, ax = plt.subplots(figsize=(7, 6))
+
+        # Violin plot shows full distribution shape (better for skewed IF data)
+        ch1_name = self.channel1_var.get() or bkgd_ch1
+        ch2_name = self.channel2_var.get() or bkgd_ch2
+        plot_data = pd.DataFrame({
+            'Intensity': pd.concat([ch1_background, ch2_background], ignore_index=True),
+            'Channel': [ch1_name] * len(ch1_background) + [ch2_name] * len(ch2_background)
+        })
+        sns.violinplot(data=plot_data, x='Channel', y='Intensity',
+                       inner=None, palette=['#4C72B0', '#55A868'], ax=ax, alpha=0.6)
+        # Overlay strip plot — subsample if large to keep the plot readable
+        max_strip = 500
+        if len(plot_data) > max_strip * 2:
+            strip_data = pd.concat([
+                plot_data[plot_data['Channel'] == ch1_name].sample(max_strip, random_state=0),
+                plot_data[plot_data['Channel'] == ch2_name].sample(max_strip, random_state=0)
+            ])
+        else:
+            strip_data = plot_data
+        sns.stripplot(data=strip_data, x='Channel', y='Intensity',
+                      color='black', alpha=0.2, size=2, jitter=True, ax=ax)
+
+        ax.set_title('Background Intensity Comparison')
+        ax.set_ylabel('Background Intensity')
+        ax.set_xlabel('')
+        text_content = f'T-test p-value: {t_p_value_rounded}\nMann-Whitney p-value: {u_p_value_rounded}'
+        self.add_plot_text(ax, text_content, position=(0.05, 0.95),
+                           bbox_style=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.8))
         plt.tight_layout()
         return fig
     
@@ -1479,6 +1669,8 @@ class ThresholdingApp:
         })
 
     def _generate_polar_plot(self, bkgd_corr_ch1, bkgd_corr_ch2, cx_ch1, cy_ch1, cx_ch2, cy_ch2, threshold_ch1, threshold_ch2):
+        mrl_threshold = self.mrl_threshold.get()
+
         # Get the intensities and coordinates
         ch1_intensity = self.data[bkgd_corr_ch1].values
         ch2_intensity = self.data[bkgd_corr_ch2].values
@@ -1486,52 +1678,44 @@ class ThresholdingApp:
         centroids_ch1_y = self.data[cy_ch1].values
         centroids_ch2_x = self.data[cx_ch2].values
         centroids_ch2_y = self.data[cy_ch2].values
-    
-        # Calculate vectors
+
         vectors_x = centroids_ch2_x - centroids_ch1_x
         vectors_y = centroids_ch2_y - centroids_ch1_y
         vector_angles = np.arctan2(vectors_y, vectors_x)
-        vector_magnitudes = np.sqrt(vectors_x**2 + vectors_y**2)
-    
-        # Classify data points
+
         positive_both = (ch1_intensity > threshold_ch1) & (ch2_intensity > threshold_ch2)
-    
-        # Create a figure for the polar plot
+
         fig = plt.figure(figsize=(10, 10))
         ax = fig.add_subplot(1, 1, 1, polar=True)
-    
+
         if np.sum(positive_both) > 0:
             angles_both = vector_angles[positive_both]
             n_bins = 36
             bin_edges = np.linspace(-np.pi, np.pi, n_bins + 1)
             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
             counts, _ = np.histogram(angles_both, bins=bin_edges)
-            bars = ax.bar(bin_centers, counts, width=(2*np.pi/n_bins), bottom=0.0, color='green', alpha=0.5, edgecolor='k', linewidth=0.5)
-    
-            # Calculate Rayleigh p-value and MRL
+            ax.bar(bin_centers, counts, width=(2*np.pi/n_bins), bottom=0.0,
+                   color='green', alpha=0.5, edgecolor='k', linewidth=0.5)
+
             mean_angle = circmean(angles_both)
-            R = np.sqrt((np.sum(np.cos(angles_both)))**2 + (np.sum(np.sin(angles_both)))**2)
-            n = len(angles_both)
-            r = R / n if n > 0 else 0
-            z = 2 * n * r**2 if n > 0 else 0
-            rayleigh_p_value = chi2.sf(z, df=2) if n > 0 else 1.0
-            mrl = r
-    
-            # Determine directionality status
-            directionality_status = "Significant" if (rayleigh_p_value < 0.05 and mrl > 0.7) else "Not Significant"
-    
-            # Display Rayleigh p-value, MRL, and directionality status
+            rayleigh_p_value = self.rayleigh_test_p_value(angles_both)
+            mrl = self.calculate_mrl(angles_both)
+
+            directionality_status = "Significant" if (rayleigh_p_value < 0.05 and mrl > mrl_threshold) else "Not Significant"
+
             p_value_text = f'Rayleigh p-value: {rayleigh_p_value:.5f}' if rayleigh_p_value >= 0.0001 else 'Rayleigh p-value: < 0.0001'
-            mrl_text = f'MRL: {mrl:.3f}'
-            status_text = f'Directionality: {directionality_status}'
-            combined_text = f'{p_value_text}\n{mrl_text}\n{status_text}'
-            ax.text(0.5, 0.1, combined_text, transform=ax.transAxes, fontsize=10, horizontalalignment='center', verticalalignment='bottom', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
-    
-            # Plot mean angle if directionality is significant
-            if rayleigh_p_value < 0.05 and mrl > 0.7 and mean_angle is not None:
+            combined_text = f'{p_value_text}\nMRL: {mrl:.3f}\nDirectionality: {directionality_status}'
+            ax.text(0.5, 0.1, combined_text, transform=ax.transAxes, fontsize=10,
+                    horizontalalignment='center', verticalalignment='bottom',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+            if rayleigh_p_value < 0.05 and mrl > mrl_threshold:
                 ax.plot([0, mean_angle], [0, np.max(counts)], 'r-', linewidth=2)
-                ax.text(0.5, 0.5, f'Mean Angle: {np.degrees(mean_angle):.2f}°', transform=ax.transAxes, fontsize=10, horizontalalignment='center', verticalalignment='center', color='red', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
-    
+                ax.text(0.5, 0.5, f'Mean Angle: {np.degrees(mean_angle):.2f}°',
+                        transform=ax.transAxes, fontsize=10, horizontalalignment='center',
+                        verticalalignment='center', color='red',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
             ax.set_xticks(np.linspace(0, 2*np.pi, 8, endpoint=False))
             ax.set_xticklabels(['0°', '45°', '90°', '135°', '180°', '225°', '270°', '315°'])
             ax.set_rlabel_position(30)
@@ -1539,7 +1723,7 @@ class ThresholdingApp:
             ax.set_title(f'Both Channels Positive ({np.sum(positive_both)} vectors)', y=1.1)
         else:
             ax.set_title('No vectors for Both Channels Positive', y=1.1)
-    
+
         plt.tight_layout()
         return fig
     
@@ -1600,7 +1784,9 @@ class ThresholdingApp:
             self.add_plot_text(ax[0], text_content)
         ch1_name = self.channel1_var.get()
         ax[0].set_title(f'{ch1_name} Intensity')
-    
+        ax[0].set_xlabel('Background-Corrected Intensity')
+        ax[0].set_ylabel('Count')
+
         # Plot channel 2 histogram
         ax[1].hist(ch2_intensity, bins=256, alpha=0.6, color='green')
         if threshold_ch2:
@@ -1609,6 +1795,8 @@ class ThresholdingApp:
             self.add_plot_text(ax[1], text_content)
         ch2_name = self.channel2_var.get()
         ax[1].set_title(f'{ch2_name} Intensity')
+        ax[1].set_xlabel('Background-Corrected Intensity')
+        ax[1].set_ylabel('Count')
     
         # Create the scatter plot with symlog scale
         ax[2].scatter(ch1_intensity, ch2_intensity, alpha=0.3)
@@ -1790,15 +1978,8 @@ class ThresholdingApp:
 
     
     def rayleigh_test(self, angles):
-        n = len(angles)
-        if n < 2:
-            return 1.0
-        cos_mean = np.mean(np.cos(angles))
-        sin_mean = np.mean(np.sin(angles))
-        R = np.sqrt(cos_mean**2 + sin_mean**2)
-        test_statistic = 2 * n * R**2
-        p_value = chi2.sf(test_statistic, df=2)
-        return p_value
+        """Alias for rayleigh_test_p_value — kept for backward compatibility."""
+        return self.rayleigh_test_p_value(angles)
 
     def determine_thresholds_based_on_rayleigh(self, vector_magnitudes, vector_angles, alpha=0.05):
         combined = list(zip(vector_magnitudes, vector_angles))
@@ -1984,13 +2165,15 @@ class ThresholdingApp:
         below_stats = calculate_stats(below_threshold_angles)
         above_stats = calculate_stats(above_threshold_angles)
     
+        mrl_threshold = self.mrl_threshold.get()
+
         # Apply Bonferroni correction for multiple testing
         corrected_alpha = alpha / 3  # Divide by 3 because we have three tests
-    
+
         # Determine significance based on corrected alpha and MRL
-        status_all = "Significant" if rayleigh_p_value < corrected_alpha and mrl > 0.7 else "Not Significant"
-        status_below = "Significant" if below_stats["rayleigh_p_value"] is not None and below_stats["rayleigh_p_value"] < corrected_alpha and below_stats["mrl"] > 0.7 else "Not Significant"
-        status_above = "Significant" if above_stats["rayleigh_p_value"] is not None and above_stats["rayleigh_p_value"] < corrected_alpha and above_stats["mrl"] > 0.7 else "Not Significant"
+        status_all = "Significant" if rayleigh_p_value < corrected_alpha and mrl > mrl_threshold else "Not Significant"
+        status_below = "Significant" if below_stats["rayleigh_p_value"] is not None and below_stats["rayleigh_p_value"] < corrected_alpha and below_stats["mrl"] > mrl_threshold else "Not Significant"
+        status_above = "Significant" if above_stats["rayleigh_p_value"] is not None and above_stats["rayleigh_p_value"] < corrected_alpha and above_stats["mrl"] > mrl_threshold else "Not Significant"
     
         self.analysis_results.append({
             "Analysis Type": "Vector Analysis",
@@ -2034,20 +2217,15 @@ class ThresholdingApp:
         return mrl
     
     def rayleigh_test_p_value(self, data):
-        """Calculate the p-value for the Rayleigh test of uniformity."""
-        if np.max(data) > 2*np.pi:
-            angles_rad = np.deg2rad(data)
-        else:
-            angles_rad = data
+        """Calculate the p-value for the Rayleigh test of uniformity using chi2.sf (exact)."""
+        angles_rad = np.deg2rad(data) if np.max(np.abs(data)) > 2 * np.pi else np.asarray(data)
         n = len(angles_rad)
-        if n == 0:
+        if n < 2:
             return 1.0
-        sum_cos = np.sum(np.cos(angles_rad))
-        sum_sin = np.sum(np.sin(angles_rad))
-        R = np.sqrt(sum_cos**2 + sum_sin**2)
-        R_bar = R / n
-        p_value = np.exp(np.sqrt(1 + 4*n + 4*n**2*(1-R_bar)) - (1 + 2*n))
-        return p_value
+        R_bar = np.sqrt(np.mean(np.cos(angles_rad))**2 + np.mean(np.sin(angles_rad))**2)
+        test_statistic = 2 * n * R_bar**2
+        p_value = float(chi2.sf(test_statistic, df=2))
+        return np.clip(p_value, 0.0, 1.0)
     
     
     def calculate_rayleigh_p_value(self, angles):
@@ -2084,14 +2262,15 @@ class ThresholdingApp:
         }
     
     def _calculate_statistics(self, vector_angles, below_threshold_mask, above_threshold_mask):
+        mrl_threshold = self.mrl_threshold.get()
         stats = {}
-    
+
         # All vectors
         rayleigh_p_value_all, mean_angle_all, mrl_all = self.calculate_rayleigh_p_value(vector_angles)
         stats['all'] = {
             'rayleigh_p_value_rounded': f"{rayleigh_p_value_all:.5f}" if rayleigh_p_value_all is not None and rayleigh_p_value_all >= 0.0001 else "p < 0.0001" if rayleigh_p_value_all is not None else "N/A",
             'mrl_rounded': f"{mrl_all:.3f}" if mrl_all is not None else "N/A",
-            'directionality_status': "Significant" if (rayleigh_p_value_all is not None and rayleigh_p_value_all < 0.05 and mrl_all is not None and mrl_all > 0.7) else "Not Significant",
+            'directionality_status': "Significant" if (rayleigh_p_value_all is not None and rayleigh_p_value_all < 0.05 and mrl_all is not None and mrl_all > mrl_threshold) else "Not Significant",
             'rayleigh_p_value': rayleigh_p_value_all,
             'mean_angle': mean_angle_all,
             'mrl': mrl_all,
@@ -2131,6 +2310,7 @@ class ThresholdingApp:
     
 
     def _create_main_figure(self, vector_data, stats):
+        mrl_threshold = self.mrl_threshold.get()
         fig = plt.figure(figsize=(18, 12))
     
         # 1. All vectors polar plot
@@ -2185,7 +2365,7 @@ class ThresholdingApp:
             p_value_text_below = (
                 f'Rayleigh corrected p-value: {formatted_p_value_below}\n'
                 f'MRL: {stats["below_threshold"]["mrl"]:.3f}\n'
-                f'Directionality: {"Significant" if stats["below_threshold"]["mrl"] and stats["below_threshold"]["mrl"] > 0.7 else "Not Significant"}'
+                f'Directionality: {"Significant" if stats["below_threshold"]["mrl"] and stats["below_threshold"]["mrl"] > mrl_threshold else "Not Significant"}'
             )
             ax2.text(0.5, 0.1, p_value_text_below, transform=ax2.transAxes, fontsize=10,
                     horizontalalignment='center', verticalalignment='bottom',
@@ -2197,7 +2377,8 @@ class ThresholdingApp:
             ax2.grid(True)
         else:
             ax2.set_title('No vectors below threshold', y=1.1)
-        ax2.set_title(f'Below Threshold ({stats["below_threshold"]["count"]} vectors)', y=1.1)
+        if stats['below_threshold']['count'] > 0:
+            ax2.set_title(f'Below Threshold ({stats["below_threshold"]["count"]} vectors)', y=1.1)
     
         # 3. Above threshold vectors polar plot
         ax3 = plt.subplot(2, 2, 3, polar=True)
@@ -2216,7 +2397,7 @@ class ThresholdingApp:
             p_value_text_above = (
                 f'Rayleigh corrected p-value: {formatted_p_value_above}\n'
                 f'MRL: {stats["above_threshold"]["mrl"]:.3f}\n'
-                f'Directionality: {"Significant" if stats["above_threshold"]["mrl"] and stats["above_threshold"]["mrl"] > 0.7 else "Not Significant"}'
+                f'Directionality: {"Significant" if stats["above_threshold"]["mrl"] and stats["above_threshold"]["mrl"] > mrl_threshold else "Not Significant"}'
             )
             ax3.text(0.5, 0.1, p_value_text_above, transform=ax3.transAxes, fontsize=10,
                     horizontalalignment='center', verticalalignment='bottom',
@@ -2228,7 +2409,8 @@ class ThresholdingApp:
             ax3.grid(True)
         else:
             ax3.set_title('No vectors above threshold', y=1.1)
-        ax3.set_title(f'Above Threshold ({stats["above_threshold"]["count"]} vectors)', y=1.1)
+        if stats['above_threshold']['count'] > 0:
+            ax3.set_title(f'Above Threshold ({stats["above_threshold"]["count"]} vectors)', y=1.1)
     
         # 4. Rayleigh p-value progression plot with improved scaling
         ax4 = plt.subplot(2, 2, 4)
